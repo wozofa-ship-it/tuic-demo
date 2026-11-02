@@ -75,6 +75,11 @@
 8. **Info.plist / project.yml 未经 xcodegen 实测**。xcodegen 生成与归档只在
    CI 验证；bundle id `com.example.tuicdemo` 是占位，签名安装时按实际账号
    规则改（SideInstaller 签名时会重签，不依赖此 id）。
+9. **链接要补两个系统库（第三版构建实证）**。Swift 编过后卡在 ld：
+   Libbox 的 Apple TLS 客户端要 `nw_*`（Network.framework），Go 运行时
+   的 DNS 解析要 `res_9_*`（libresolv.tbd）。project.yml 里以
+   `- sdk: Network.framework` / `- sdk: libresolv.tbd` 补上，不用
+   entitlement。UIUtilities / SwiftUICore 那两条只是警告，不是失败原因。
 
 ## 刻意没做的事
 

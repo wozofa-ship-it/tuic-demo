@@ -28,6 +28,13 @@ targets:
       # xcodebuild runs. It is a build artifact: do NOT commit it.
       - framework: Libbox.xcframework
         embed: true
+      # Libbox pulls these two system libraries, so the app target must link
+      # them or the archive fails at ld with undefined symbols (2026-11-02
+      # third build, verified from the log): Network for the nw_* symbols
+      # used by libbox's Apple TLS client, libresolv for the res_9_* symbols
+      # used by the Go runtime's DNS resolver. No entitlement needed.
+      - sdk: Network.framework
+      - sdk: libresolv.tbd
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.tuicdemo
