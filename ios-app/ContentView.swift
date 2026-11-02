@@ -5,6 +5,7 @@ struct ContentView: View {
     @State private var result = "粘贴 TUIC 链接，点“测试”。"
     @State private var testing = false
     @State private var running = false
+    @State private var configSummary = ""
 
     var body: some View {
         NavigationStack {
@@ -12,7 +13,7 @@ struct ContentView: View {
                 Text("TUIC 连通测试")
                     .font(.title2.bold())
 
-                Text("只做一件事：起 sing-box（mixed 入站 + tuic 出站），走本地 SOCKS 抓 https://example.com。链接只留内存，不存盘、不记日志。")
+                Text("只做一件事：起 sing-box（mixed 入站 + tuic 出站），走本地 SOCKS 抓 example.com（域名 + IP 双目标）。链接只留内存，不存盘、不记日志；下面只显示服务器地址与参数，不显示 uuid/密码。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
@@ -42,6 +43,12 @@ struct ContentView: View {
                         .disabled(testing || !running)
                 }
 
+                if !configSummary.isEmpty {
+                    Text(configSummary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
                 ScrollView {
                     Text(result)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -66,7 +73,10 @@ struct ContentView: View {
             do {
                 let parsed = try parseTUICLink(link)
                 let json = try singBoxJSON(config: parsed, socksPort: SingBoxBridge.socksPort)
-                await MainActor.run { result = "链接解析通过，正在启动核心…" }
+                await MainActor.run {
+                    configSummary = redactedSummary(config: parsed)
+                    result = "链接解析通过，正在启动核心…"
+                }
                 // Start on a background thread: StartService blocks until the
                 // instance is up. Snapshot `running` first: @State must not be
                 // read from inside the detached (nonisolated) task.
@@ -79,11 +89,11 @@ struct ContentView: View {
                 }.value
                 await MainActor.run {
                     running = true
-                    result = "核心已启动，正在通过 SOCKS 探测 example.com…"
+                    result = "核心已启动，正在通过 SOCKS 探测（域名 + IP 双目标）…"
                 }
-                let probe = try await SingBoxBridge.probe()
+                let report = try await SingBoxBridge.probe()
                 await MainActor.run {
-                    result = "成功：HTTP \(probe.status)，\(probe.milliseconds)ms"
+                    result = report.display
                 }
             } catch {
                 await MainActor.run {

@@ -66,10 +66,15 @@ enum SingBoxBridge {
         }
     }
 
-    /// Probe example.com through the local SOCKS inbound WITHOUT URLSession.
-    /// Returns (HTTP status, milliseconds). Stage errors carry domain
-    /// "TUICDemoProbe": 1 = TCP, 2 = SOCKS greeting, 3 = SOCKS CONNECT,
-    /// 4 = HTTP, 0 = timeout, so the UI line tells which layer failed.
+    /// Dual-target probe (v07): the v06 result was CONNECT rep=1 on
+    /// example.com, which cannot tell a TUIC dial failure apart from
+    /// an iOS DNS failure — the probe target is a domain, and sing-box
+    /// must resolve it before dialing. So this probes two targets over
+    /// two fresh SOCKS sessions: example.com:80 (domain) and
+    /// 1.1.1.1:80 (literal IP, no DNS involved). Both share one
+    /// absolute 30 s deadline. A TCP/greeting failure on the domain
+    /// target still throws (local core problem, same as v06); anything
+    /// else is reported per target.
     ///
     /// v04 overturned the old assumption (NOTES item 7): iOS CFNetwork
     /// rejects a SOCKS connectionProxyDictionary outright — the probe died
@@ -80,7 +85,7 @@ enum SingBoxBridge {
     /// probe speaks SOCKS5 itself over NWConnection, then plain HTTP
     /// through the tunnel. Plain HTTP (not TLS) is enough: the question is
     /// whether the tunnel carries traffic at all.
-    static func probe() async throws -> (status: Int, milliseconds: Int) {
+    static func probe() async throws -> ProbeReport {
         try await Task.detached(priority: .userInitiated) {
             try Self.probeBlocking()
         }.value
@@ -90,36 +95,118 @@ enum SingBoxBridge {
         NSError(domain: "TUICDemoProbe", code: code, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
-    /// Blocking SOCKS5 + HTTP probe. Runs on a detached task's thread;
-    /// every wait shares one absolute 30 s deadline, so a hung core can't
-    /// stall the UI forever.
-    private static func probeBlocking() throws -> (status: Int, milliseconds: Int) {
+    /// Where one target's probe stopped: tcp/greeting = the local core
+    /// isn't reachable (v06's stages 1/2); connect = SOCKS CONNECT was
+    /// rejected (rep is in `detail`); http = CONNECT ok but the HTTP
+    /// exchange failed; done = HTTP status received.
+    enum ProbeStage {
+        case tcp, greeting, connect, http, done
+    }
+
+    struct ProbeTargetResult {
+        let label: String
+        let detail: String
+        let stage: ProbeStage
+    }
+
+    struct ProbeReport {
+        let domain: ProbeTargetResult
+        let ip: ProbeTargetResult
+
+        /// Decisive patterns only; anything else gets no hint — the
+        /// screenshot goes to a human for interpretation.
+        var hint: String? {
+            switch (domain.stage, ip.stage) {
+            case (.connect, .done):
+                return "IP 通、域名不通：iOS 侧 DNS 有问题，TUIC 本身是通的"
+            case (.connect, .connect):
+                return "两边都拒：TUIC 拨号/服务器问题，DNS 不是主因"
+            case (.done, .done):
+                return "TUIC 全通"
+            default:
+                return nil
+            }
+        }
+
+        var display: String {
+            var lines = ["\(domain.label)：\(domain.detail)", "\(ip.label)：\(ip.detail)"]
+            if let hint {
+                lines.append(hint)
+            }
+            return lines.joined(separator: "\n")
+        }
+    }
+
+    private static func probeBlocking() throws -> ProbeReport {
         let deadline = DispatchTime.now() + .seconds(30)
-        let start = Date()
+        let domain = probeTarget(
+            label: "域名 example.com:80",
+            connectBytes: [0x05, 0x01, 0x00, 0x03, UInt8("example.com".count)] + Array("example.com".utf8) + [0x00, 0x50],
+            httpRequest: "GET / HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n\r\n",
+            deadline: deadline)
+        // Local core problem: same behavior as v06, abort with the
+        // staged error instead of reporting a misleading dual result.
+        if domain.stage == .tcp || domain.stage == .greeting {
+            throw probeError(domain.stage == .tcp ? 1 : 2, domain.detail)
+        }
+        let ip = probeTarget(
+            label: "IP 1.1.1.1:80",
+            connectBytes: [0x05, 0x01, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x50],
+            httpRequest: "GET / HTTP/1.0\r\nHost: 1.1.1.1\r\nConnection: close\r\n\r\n",
+            deadline: deadline)
+        return ProbeReport(domain: domain, ip: ip)
+    }
+
+    /// One full target probe on its own NWConnection. Never throws:
+    /// every failure mode becomes a staged result, so the caller can
+    /// decide what aborts and what gets reported.
+    private static func probeTarget(label: String, connectBytes: [UInt8], httpRequest: String, deadline: DispatchTime) -> ProbeTargetResult {
+        let targetStart = Date()
+        var stage: ProbeStage = .tcp
+        do {
+            let conn = try openConnection(deadline: deadline)
+            defer { conn.cancel() }
+            stage = .greeting
+            try socksGreeting(conn: conn, deadline: deadline)
+            stage = .connect
+            let rep = try socksConnect(conn: conn, bytes: connectBytes, deadline: deadline)
+            guard rep == 0 else {
+                return ProbeTargetResult(label: label, detail: "CONNECT 被拒 rep=\(rep)", stage: .connect)
+            }
+            stage = .http
+            let code = try httpGet(conn: conn, request: httpRequest, deadline: deadline)
+            let ms = Int(Date().timeIntervalSince(targetStart) * 1000)
+            return ProbeTargetResult(label: label, detail: "成功 HTTP \(code)，\(ms)ms", stage: .done)
+        } catch let error as NSError {
+            return ProbeTargetResult(label: label, detail: error.localizedDescription, stage: stage)
+        } catch {
+            return ProbeTargetResult(label: label, detail: error.localizedDescription, stage: stage)
+        }
+    }
+
+    private static func openConnection(deadline: DispatchTime) throws -> NWConnection {
         guard let port = NWEndpoint.Port(rawValue: UInt16(socksPort)) else {
             throw probeError(1, "SOCKS 端口非法")
         }
         let conn = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
-
-        // --- TCP connect ---
-        let readySem = DispatchSemaphore(value: 0)
+        let sem = DispatchSemaphore(value: 0)
         var readyError: Error?
         conn.stateUpdateHandler = { state in
             switch state {
             case .ready:
-                readySem.signal()
+                sem.signal()
             case .failed(let error):
                 readyError = error
-                readySem.signal()
+                sem.signal()
             case .cancelled:
                 readyError = probeError(1, "TCP 连接被取消")
-                readySem.signal()
+                sem.signal()
             default:
                 break
             }
         }
         conn.start(queue: .global())
-        guard readySem.wait(timeout: deadline) == .success else {
+        guard sem.wait(timeout: deadline) == .success else {
             conn.cancel()
             throw probeError(0, "TCP 连接超时（30 秒），本地 SOCKS 没在听？")
         }
@@ -127,67 +214,67 @@ enum SingBoxBridge {
         if let error = readyError {
             throw probeError(1, "TCP 连不上本地 SOCKS（核心没在听？）：\(error.localizedDescription)")
         }
-        defer { conn.cancel() }
+        return conn
+    }
 
-        func send(_ bytes: [UInt8]) throws {
-            let sem = DispatchSemaphore(value: 0)
-            var sendError: Error?
-            conn.send(content: Data(bytes), completion: .contentProcessed { error in
-                sendError = error
-                sem.signal()
-            })
-            guard sem.wait(timeout: deadline) == .success else {
-                throw probeError(0, "发送超时（30 秒）")
-            }
-            if let error = sendError {
-                throw probeError(1, "TCP 发送失败：\(error.localizedDescription)")
-            }
+    private static func send(conn: NWConnection, bytes: [UInt8], deadline: DispatchTime) throws {
+        let sem = DispatchSemaphore(value: 0)
+        var sendError: Error?
+        conn.send(content: Data(bytes), completion: .contentProcessed { error in
+            sendError = error
+            sem.signal()
+        })
+        guard sem.wait(timeout: deadline) == .success else {
+            throw probeError(0, "发送超时（30 秒）")
         }
-
-        func recv(minimum: Int, maximum: Int) throws -> Data {
-            let sem = DispatchSemaphore(value: 0)
-            var out: Data?
-            var recvError: Error?
-            conn.receive(minimumIncompleteLength: minimum, maximumLength: maximum) { data, _, _, error in
-                out = data
-                recvError = error
-                sem.signal()
-            }
-            guard sem.wait(timeout: deadline) == .success else {
-                throw probeError(0, "接收超时（30 秒）")
-            }
-            if let error = recvError {
-                throw probeError(1, "TCP 接收失败：\(error.localizedDescription)")
-            }
-            guard let data = out, !data.isEmpty else {
-                throw probeError(1, "TCP 连接被对方关闭")
-            }
-            return data
+        if let error = sendError {
+            throw probeError(1, "TCP 发送失败：\(error.localizedDescription)")
         }
+    }
 
-        // --- SOCKS5 greeting: VER=5, 1 method, NO AUTH ---
-        try send([0x05, 0x01, 0x00])
-        let greeting = try recv(minimum: 2, maximum: 2)
+    private static func recv(conn: NWConnection, minimum: Int, maximum: Int, deadline: DispatchTime) throws -> Data {
+        let sem = DispatchSemaphore(value: 0)
+        var out: Data?
+        var recvError: Error?
+        conn.receive(minimumIncompleteLength: minimum, maximumLength: maximum) { data, _, _, error in
+            out = data
+            recvError = error
+            sem.signal()
+        }
+        guard sem.wait(timeout: deadline) == .success else {
+            throw probeError(0, "接收超时（30 秒）")
+        }
+        if let error = recvError {
+            throw probeError(1, "TCP 接收失败：\(error.localizedDescription)")
+        }
+        guard let data = out, !data.isEmpty else {
+            throw probeError(1, "TCP 连接被对方关闭")
+        }
+        return data
+    }
+
+    private static func socksGreeting(conn: NWConnection, deadline: DispatchTime) throws {
+        try send(conn: conn, bytes: [0x05, 0x01, 0x00], deadline: deadline)
+        let greeting = try recv(conn: conn, minimum: 2, maximum: 2, deadline: deadline)
         guard greeting.count >= 2, greeting[0] == 0x05, greeting[1] == 0x00 else {
             throw probeError(2, "SOCKS 握手被拒（服务器没回 05 00）")
         }
+    }
 
-        // --- SOCKS5 CONNECT example.com:80 (domain form) ---
-        var connect: [UInt8] = [0x05, 0x01, 0x00, 0x03, UInt8("example.com".count)]
-        connect += Array("example.com".utf8)
-        connect += [0x00, 0x50]
-        try send(connect)
-        let reply = try recv(minimum: 4, maximum: 64)
+    /// Sends CONNECT, returns the reply REP byte. A malformed reply
+    /// throws stage-3 (connect) so the caller attributes it correctly.
+    private static func socksConnect(conn: NWConnection, bytes: [UInt8], deadline: DispatchTime) throws -> UInt8 {
+        try send(conn: conn, bytes: bytes, deadline: deadline)
+        let reply = try recv(conn: conn, minimum: 4, maximum: 64, deadline: deadline)
         guard reply.count >= 2, reply[0] == 0x05 else {
             throw probeError(3, "SOCKS CONNECT 无有效回复")
         }
-        guard reply[1] == 0x00 else {
-            throw probeError(3, "SOCKS CONNECT 被拒（rep=\(reply[1])）：TUIC 隧道/服务器不通")
-        }
+        return reply[1]
+    }
 
-        // --- Plain HTTP through the tunnel ---
-        try send(Array("GET / HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n\r\n".utf8))
-        let response = try recv(minimum: 1, maximum: 4096)
+    private static func httpGet(conn: NWConnection, request: String, deadline: DispatchTime) throws -> Int {
+        try send(conn: conn, bytes: Array(request.utf8), deadline: deadline)
+        let response = try recv(conn: conn, minimum: 1, maximum: 4096, deadline: deadline)
         guard let text = String(data: response, encoding: .utf8) else {
             throw probeError(4, "HTTP 响应不是文本")
         }
@@ -196,6 +283,6 @@ enum SingBoxBridge {
         guard parts.count >= 2, let code = Int(parts[1]) else {
             throw probeError(4, "HTTP 无状态行（首行：\(firstLine)）")
         }
-        return (code, Int(Date().timeIntervalSince(start) * 1000))
+        return code
     }
 }

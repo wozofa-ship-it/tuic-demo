@@ -125,3 +125,15 @@
   证明不靠它们也能通）。
 - 没做“失败自动换参数重试”——测试 demo 失败要响亮，不要猜。
 - 没写任何真实链接、uuid、password、服务器地址进仓库（任务硬约束）。
+
+## v07（2026-11-02）：双目标探测 + 脱敏配置显示
+- v06 真机结果是 CONNECT rep=1（TCP 通、握手通，卡在 sing-box 打 TUIC
+  服务器那步）。但这一个结果分不清两种死法：TUIC 拨号失败，还是 iOS
+  侧 DNS 失败（探测目标 example.com 是域名，sing-box 打之前要先解析）。
+- 所以 v07 探两个目标（各用一条新 SOCKS 连接，共用 30 秒 deadline）：
+  example.com:80（域名）与 1.1.1.1:80（字面 IP，不走 DNS）。
+  IP 通、域名不通 = iOS DNS 问题、TUIC 本身通；两边都拒 = TUIC 拨号/
+  服务器问题；两边都通 = TUIC 全通；其他组合不猜，等截图人工断。
+- UI 新增脱敏解析摘要（服务器:端口、SNI、ALPN、拥塞控制、UDP 中继、
+  allow_insecure），uuid/password 绝不显示。
+- v07 是诊断步，不是宣称修好：一次测试出 DNS 还是 TUIC 的答案，再定修法。

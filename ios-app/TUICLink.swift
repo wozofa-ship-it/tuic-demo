@@ -146,3 +146,15 @@ func singBoxJSON(config: TUICConfig, socksPort: Int) throws -> String {
     }
     return json
 }
+
+/// Redacted parse summary for the UI: server address and parameters only.
+/// uuid/password are NEVER included (they stay in memory for sing-box).
+func redactedSummary(config: TUICConfig) -> String {
+    var lines = ["服务器：\(config.server):\(config.serverPort)"]
+    lines.append("SNI：\(config.serverName ?? "默认（跟服务器地址）")")
+    lines.append("ALPN：\(config.alpn.isEmpty ? "无" : config.alpn.joined(separator: ","))")
+    lines.append("拥塞控制：\(config.congestionControl ?? "默认")")
+    lines.append("UDP 中继：\(config.udpRelayMode ?? "默认")")
+    lines.append("allow_insecure：\(config.insecure ? "是" : "否")")
+    return lines.joined(separator: "\n")
+}
