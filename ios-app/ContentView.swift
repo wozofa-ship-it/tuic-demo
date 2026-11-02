@@ -89,7 +89,12 @@ struct ContentView: View {
                 await MainActor.run {
                     // Verbatim error, UI only, never persisted. sing-box dial
                     // errors may name the server address, never uuid/password.
-                    result = "失败：\(error.localizedDescription)"
+                    // Domain + code pin down which layer failed: NSURLErrorDomain
+                    // = URLSession/CFNetwork, anything else = Go/sing-box side.
+                    // (2026-11-02: probe failed with bare "bad URL"; the domain
+                    // and code are what tell those two apart.)
+                    let ns = error as NSError
+                    result = "失败：[\(ns.domain) \(ns.code)] \(error.localizedDescription)"
                 }
             }
             await MainActor.run { testing = false }

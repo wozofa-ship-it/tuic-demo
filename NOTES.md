@@ -99,6 +99,14 @@
     Documents 根目录（99 字节），workingPath/tempPath 仍走
     Documents/singbox；sBasePath 在 libbox 里只用来拼这个
     socket 路径，改 basePath 不影响其他状态。
+12. **探测报 bad URL（2026-11-02 真机，原因待查）**。v03 核心能启动，
+    探测那步报 `失败：bad URL`，且用户确认每次都复现。已排除：
+    链接解析（报错全是中文）、核心启动（19:17 亲眼见“核心已启动”）、
+    sing-box 本体源码（1.14.4 里没有 bad URL 这句）。头号嫌疑是
+    URLSession 那组原始字符串 SOCKS 代理键（NOTES 里本来就标着
+    运行时未验）。定位手段：失败输出现带 `[domain code]`
+    （NSURLErrorDomain = URLSession/CFNetwork，其余 = Go 那边），
+    下一版凭它定性。
 
 ## 刻意没做的事
 
