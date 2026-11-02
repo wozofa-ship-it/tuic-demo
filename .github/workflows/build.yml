@@ -20,6 +20,12 @@ jobs:
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
 
+      # gomobile bind 要求 golang.org/x/mobile 在当前模块依赖图里，
+      # 光靠 go mod tidy 加不进来（模块里没有任何包 import 它）。
+      # 报错原话的修法：先 go get -tool 记 tool directive，再 tidy 保留。
+      - name: Add gomobile tool dependency
+        run: go get -tool golang.org/x/mobile/cmd/gobind
+
       # with_quic is REQUIRED: without it, sing-box compiles
       # include/quic_stub.go and the tuic/hysteria2 outbound constructors
       # are silently omitted (see NOTES.md). The demo would then fail at
