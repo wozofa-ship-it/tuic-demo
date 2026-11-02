@@ -80,6 +80,14 @@
    的 DNS 解析要 `res_9_*`（libresolv.tbd）。project.yml 里以
    `- sdk: Network.framework` / `- sdk: libresolv.tbd` 补上，不用
    entitlement。UIUtilities / SwiftUICore 那两条只是警告，不是失败原因。
+10. **手写 Info.plist 缺 CFBundleExecutable，SideInstaller 企业签名失败
+    （第六版修复，2026-11-02 真机实证）**。构建能过、归档能过，但
+    isideload 签名时要读 Info.plist 找可执行文件，缺这个键直接报
+    `Info.plist is missing string key CFBundleExecutable`（sign.rs:71）。
+    修法：补 `<key>CFBundleExecutable</key><string>TUICDemo</string>`
+    （值必须等于包内二进制名 `TUICDemo.app/TUICDemo`）。同批顺手把
+    `UIRequiredDeviceCapabilities` 的 `armv7` 改成 `arm64`：二进制本
+    就是 arm64-only，armv7 是旧值，留着可能在安装时被能力检查拦下。
 
 ## 刻意没做的事
 
