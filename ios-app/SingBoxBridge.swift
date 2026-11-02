@@ -107,6 +107,11 @@ enum SingBoxBridge {
         let label: String
         let detail: String
         let stage: ProbeStage
+        /// True only when a SOCKS reply with rep != 0 was actually
+        /// received. A timeout inside the connect stage leaves it false:
+        /// v07 wrongly counted connect-stage timeouts as rejections and
+        /// printed "两边都拒" for a reject + a timeout.
+        let rejected: Bool
     }
 
     struct ProbeReport {
@@ -116,16 +121,16 @@ enum SingBoxBridge {
         /// Decisive patterns only; anything else gets no hint — the
         /// screenshot goes to a human for interpretation.
         var hint: String? {
-            switch (domain.stage, ip.stage) {
-            case (.connect, .done):
-                return "IP 通、域名不通：iOS 侧 DNS 有问题，TUIC 本身是通的"
-            case (.connect, .connect):
-                return "两边都拒：TUIC 拨号/服务器问题，DNS 不是主因"
-            case (.done, .done):
+            if domain.stage == .done && ip.stage == .done {
                 return "TUIC 全通"
-            default:
-                return nil
             }
+            if domain.rejected && ip.stage == .done {
+                return "IP 通、域名不通：iOS 侧 DNS 有问题，TUIC 本身是通的"
+            }
+            if domain.rejected && ip.rejected {
+                return "两边都拒：TUIC 拨号/服务器问题，DNS 不是主因"
+            }
+            return nil
         }
 
         var display: String {
@@ -171,16 +176,16 @@ enum SingBoxBridge {
             stage = .connect
             let rep = try socksConnect(conn: conn, bytes: connectBytes, deadline: deadline)
             guard rep == 0 else {
-                return ProbeTargetResult(label: label, detail: "CONNECT 被拒 rep=\(rep)", stage: .connect)
+                return ProbeTargetResult(label: label, detail: "CONNECT 被拒 rep=\(rep)", stage: .connect, rejected: true)
             }
             stage = .http
             let code = try httpGet(conn: conn, request: httpRequest, deadline: deadline)
             let ms = Int(Date().timeIntervalSince(targetStart) * 1000)
-            return ProbeTargetResult(label: label, detail: "成功 HTTP \(code)，\(ms)ms", stage: .done)
+            return ProbeTargetResult(label: label, detail: "成功 HTTP \(code)，\(ms)ms", stage: .done, rejected: false)
         } catch let error as NSError {
-            return ProbeTargetResult(label: label, detail: error.localizedDescription, stage: stage)
+            return ProbeTargetResult(label: label, detail: error.localizedDescription, stage: stage, rejected: false)
         } catch {
-            return ProbeTargetResult(label: label, detail: error.localizedDescription, stage: stage)
+            return ProbeTargetResult(label: label, detail: error.localizedDescription, stage: stage, rejected: false)
         }
     }
 

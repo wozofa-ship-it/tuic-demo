@@ -137,3 +137,22 @@
 - UI 新增脱敏解析摘要（服务器:端口、SNI、ALPN、拥塞控制、UDP 中继、
   allow_insecure），uuid/password 绝不显示。
 - v07 是诊断步，不是宣称修好：一次测试出 DNS 还是 TUIC 的答案，再定修法。
+
+## v08（2026-11-02）：核心日志落盘 + hint 修 bug
+- 源码级研究结论（sing-box 1.14.4 + SFA 对照）：demo 的两个平台桩**不是**
+  病因。LocalDNSTransport=nil 时 "local" 仍走标准 transport（且 SFA iOS
+  同样返回 nil）；拨号路在 auto_detect_interface 关着时根本不查接口列表
+  与监听器（开了反而会因空接口直接报错）。DNS 也不在拨号路上：TUIC
+  服务器是 IP，目标域名由 TUIC 流带给服务器，本地不解析。
+- 真正的卡点在 TUIC/QUIC 拨号内部：quic-go 握手超时约 10 秒，所以 30 秒
+  挂起不是静默丢包的握手失败——可能是握手成功后 OpenStream 卡流控、
+  run-loop 卡住、或 SOCKS 处理某路没回包；探针的 30 秒 deadline 取消不了
+  sing-box 的拨号（offer 用客户端生命周期上下文），所以探针超时不等于
+  拨号超时。没有核心日志，分不清是哪一种。
+- v08 改动：生成的 JSON 加 `"log": {"level": "info", "output": Documents/singbox.log}`
+  （libbox 没有日志 API，配置文件落盘是唯一办法）；每次测试前删旧日志，
+  失败时 UI 附核心日志末尾 40 行；成功不附。日志只记拨号过程，不记
+  uuid/密码（sing-box 从不记配置秘密）。Go 侧往 Documents 写文件在真机
+  上待验证——如果 UI 显示“核心日志没写出来”，那本身也是一个答案。
+- 顺带修 v07 提示 bug：CONNECT 阶段超时不再算“被拒”（新增 rejected 标志，
+  只有真正收到 rep != 0 才算），域名被拒 + IP 超时不再误报“两边都拒”。

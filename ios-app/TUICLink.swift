@@ -98,7 +98,13 @@ func parseTUICLink(_ raw: String) throws -> TUICConfig {
 /// Shape: mixed inbound on loopback + single tuic outbound + route.final.
 /// The `dns` section pins the system resolver; without it, sing-box still
 /// resolves, but an explicit section removes one variable from the test.
-func singBoxJSON(config: TUICConfig, socksPort: Int) throws -> String {
+/// The `log` section writes the core log to `logPath` (v08): libbox has
+/// no log-capture API, but a config `log.output` file is opened by the
+/// core (log/observable.go) — the only way to see the exact dial error
+/// on device. The file holds dial progress only, never uuid/password
+/// (sing-box never logs config secrets); the UI truncates it on every
+/// new test so it never accumulates.
+func singBoxJSON(config: TUICConfig, socksPort: Int, logPath: String) throws -> String {
     var tuic: [String: Any] = [
         "type": "tuic",
         "tag": "tuic-out",
@@ -126,7 +132,7 @@ func singBoxJSON(config: TUICConfig, socksPort: Int) throws -> String {
     tuic["tls"] = tls
 
     let root: [String: Any] = [
-        "log": ["level": "info"],
+        "log": ["level": "info", "output": logPath],
         "dns": [
             "servers": [["tag": "local", "type": "local"]],
             "final": "local",

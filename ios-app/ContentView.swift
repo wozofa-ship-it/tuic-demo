@@ -13,7 +13,7 @@ struct ContentView: View {
                 Text("TUIC 连通测试")
                     .font(.title2.bold())
 
-                Text("只做一件事：起 sing-box（mixed 入站 + tuic 出站），走本地 SOCKS 抓 example.com（域名 + IP 双目标）。链接只留内存，不存盘、不记日志；下面只显示服务器地址与参数，不显示 uuid/密码。")
+                Text("只做一件事：起 sing-box（mixed 入站 + tuic 出站），走本地 SOCKS 抓 example.com（域名 + IP 双目标）。链接只留内存，不存盘；核心运行日志写到 singbox.log（只记拨号过程，不记 uuid/密码），每次测试前清空；下面只显示服务器地址与参数，不显示 uuid/密码。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
@@ -72,7 +72,14 @@ struct ContentView: View {
         Task {
             do {
                 let parsed = try parseTUICLink(link)
-                let json = try singBoxJSON(config: parsed, socksPort: SingBoxBridge.socksPort)
+                // Fresh log per test: the core appends to singbox.log, so
+                // delete the previous run first or the tail below would
+                // mix two runs. The file holds dial progress only, never
+                // uuid/password (sing-box never logs config secrets).
+                let logURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("singbox.log")
+                try? FileManager.default.removeItem(at: logURL)
+                let json = try singBoxJSON(config: parsed, socksPort: SingBoxBridge.socksPort, logPath: logURL.path)
                 await MainActor.run {
                     configSummary = redactedSummary(config: parsed)
                     result = "链接解析通过，正在启动核心…"
@@ -93,7 +100,11 @@ struct ContentView: View {
                 }
                 let report = try await SingBoxBridge.probe()
                 await MainActor.run {
-                    result = report.display
+                    var text = report.display
+                    if !(report.domain.stage == .done && report.ip.stage == .done) {
+                        text += "\n--- 核心日志（末尾 40 行）---\n" + coreLogTail()
+                    }
+                    result = text
                 }
             } catch {
                 await MainActor.run {
@@ -104,15 +115,28 @@ struct ContentView: View {
                     // (2026-11-02: probe failed with bare "bad URL"; the domain
                     // and code are what tell those two apart.)
                     let ns = error as NSError
-                    result = "失败：[\(ns.domain) \(ns.code)] \(error.localizedDescription)"
+                    result = "失败：[\(ns.domain) \(ns.code)] \(error.localizedDescription)\n--- 核心日志（末尾 40 行）---\n" + coreLogTail()
                 }
             }
             await MainActor.run { testing = false }
         }
     }
 
-    private func stopService() {
-        testing = true
+    /// Last ~40 lines of the core log written by sing-box (see
+    /// singBoxJSON's log.output), or a note when the core wrote nothing
+    /// — which is itself diagnostic (file writing from the Go side is
+    /// unconfirmed on device until v08 runs). UI only.
+    private func coreLogTail() -> String {
+        let logURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("singbox.log")
+        guard let text = try? String(contentsOf: logURL, encoding: .utf8),
+              !text.isEmpty else {
+            return "（核心日志没写出来）"
+        }
+        return text.components(separatedBy: "\n").suffix(40).joined(separator: "\n")
+    }
+
+    private func stopService() {        testing = true
         Task {
             do {
                 try await Task.detached { try SingBoxBridge.stop() }.value
