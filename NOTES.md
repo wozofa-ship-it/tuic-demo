@@ -88,6 +88,17 @@
     （值必须等于包内二进制名 `TUICDemo.app/TUICDemo`）。同批顺手把
     `UIRequiredDeviceCapabilities` 的 `armv7` 改成 `arm64`：二进制本
     就是 arm64-only，armv7 是旧值，留着可能在安装时被能力检查拦下。
+11. **libbox command server 的 unix socket 路径超长，bind EINVAL
+    （第七版修复，2026-11-02 真机实证）**。真机点测试报
+    `listen command server: listen unix .../Documents/singbox/
+    command.sock: bind: invalid argument`。根因不在 TUIC、不在
+    链接：1.14.4 command_server.go:142 拼的是
+    basePath + "/command.sock"，而 Darwin AF_UNIX sun_path 上限
+    104 字节；App 沙盒前缀本身 76 字节，Documents/singbox 再加
+    上去是 107 字节，bind 直接 EINVAL。修法：basePath 改传
+    Documents 根目录（99 字节），workingPath/tempPath 仍走
+    Documents/singbox；sBasePath 在 libbox 里只用来拼这个
+    socket 路径，改 basePath 不影响其他状态。
 
 ## 刻意没做的事
 

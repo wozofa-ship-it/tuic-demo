@@ -36,8 +36,11 @@ import (
 var commandServer *sbox.CommandServer
 
 // Setup initializes libbox process-wide state. It must be called once before
-// any other function. basePath/workingPath/tempPath must be writable app
-// directories (Swift passes Documents/singbox for all three).
+// any other function. basePath is Documents root (NOT Documents/singbox):
+// libbox binds its command server at basePath + "/command.sock", and
+// Darwin AF_UNIX sun_path caps at 104 bytes; the app container prefix
+// alone is 76 bytes, so Documents/singbox would make 107 and bind fails
+// EINVAL on device. workingPath/tempPath are Documents/singbox.
 func Setup(basePath, workingPath, tempPath string) error {
 	return sbox.Setup(&sbox.SetupOptions{
 		BasePath:    basePath,

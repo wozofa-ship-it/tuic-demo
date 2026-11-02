@@ -21,15 +21,21 @@ enum SingBoxBridge {
 
     private static var setupDone = false
 
-    /// One-time libbox init. All three paths point at Documents/singbox.
+    /// One-time libbox init. basePath MUST be Documents root, not
+    /// Documents/singbox: libbox binds its command server at
+    /// basePath + "/command.sock" (1.14.4 command_server.go:142),
+    /// and Darwin AF_UNIX sun_path caps at 104 bytes. The app
+    /// container prefix alone is 76 bytes, so Documents/singbox
+    /// + "/command.sock" = 107 bytes and bind fails EINVAL
+    /// ("invalid argument") on device. Documents root gives
+    /// 99 bytes. workingPath/tempPath stay Documents/singbox.
     static func setupIfNeeded() throws {
         guard !setupDone else { return }
-        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("singbox", isDirectory: true)
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let dir = docs.appendingPathComponent("singbox", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let path = dir.path
         var error: NSError?
-        guard LibboxSetup(path, path, path, &error) else {
+        guard LibboxSetup(docs.path, dir.path, dir.path, &error) else {
             throw error ?? NSError(domain: "TUICDemo", code: -1, userInfo: [NSLocalizedDescriptionKey: "libbox setup failed"])
         }
         setupDone = true
