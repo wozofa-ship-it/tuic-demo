@@ -148,7 +148,7 @@ enum SingBoxBridge {
             let sem = DispatchSemaphore(value: 0)
             var out: Data?
             var recvError: Error?
-            conn.receive(minimumLength: minimum, maximumLength: maximum) { data, _, _, error in
+            conn.receive(minimumIncompleteLength: minimum, maximumLength: maximum) { data, _, _, error in
                 out = data
                 recvError = error
                 sem.signal()
