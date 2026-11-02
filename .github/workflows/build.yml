@@ -1,0 +1,63 @@
+name: Build TUIC Demo
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init
+
+      # with_quic is REQUIRED: without it, sing-box compiles
+      # include/quic_stub.go and the tuic/hysteria2 outbound constructors
+      # are silently omitted (see NOTES.md). The demo would then fail at
+      # CheckConfig with an unknown-outbound error instead of connecting.
+      - name: Build Libbox.xcframework
+        run: |
+          go mod tidy
+          gomobile bind -target ios -tags with_quic -o Libbox.xcframework ./libbox
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build unsigned IPA
+        run: |
+          xcodebuild -project TUICDemo.xcodeproj \
+            -scheme TUICDemo \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/TUICDemo.xcarchive \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -r build/TUICDemo.xcarchive/Products/Applications/TUICDemo.app Payload/
+          zip -r TUICDemo-unsigned.ipa Payload
+          shasum -a 256 TUICDemo-unsigned.ipa > TUICDemo-unsigned.ipa.sha256
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: TUICDemo-unsigned
+          path: |
+            TUICDemo-unsigned.ipa
+            TUICDemo-unsigned.ipa.sha256

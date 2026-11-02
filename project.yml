@@ -1,0 +1,35 @@
+name: TUICDemo
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1"
+    # No team is pinned. Whoever builds this selects their OWN signing team
+    # in Xcode (or signs the unsigned IPA with SideInstaller), never anyone
+    # else's account.
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  TUICDemo:
+    type: application
+    platform: iOS
+    sources:
+      - path: ios-app
+    dependencies:
+      # Built by the CI workflow (gomobile bind) into the repo root before
+      # xcodebuild runs. It is a build artifact: do NOT commit it.
+      - framework: Libbox.xcframework
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.tuicdemo
+        INFOPLIST_FILE: ios-app/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
