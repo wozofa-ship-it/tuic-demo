@@ -45,12 +45,14 @@
 
 ## 未确定（首次 CI 构建 / 真机运行时必须核）
 
-1. **gomobile 生成的 Swift 符号名**（最大不确定）。SingBoxBridge.swift 假设
-   Go 包 `libbox` 的函数导出为 `LibboxSetup` / `LibboxCheckConfig` /
-   `LibboxStartService` / `LibboxStopService` / `LibboxVersion`，Go error 作
-   Swift throws。首次 CI 构建后：解压 `Libbox.xcframework`，看
-   `Headers/` 里的生成头文件，名字不对就改 SingBoxBridge.swift 里的调用
-   （每处一行），不要改 Go 侧。
+1. **gomobile 生成的 Swift 符号名（已实证，不再是不确定）**。2026-11-02 第二版
+   构建的编译器 note 直接贴出了生成头文件 `Libbox.objc.h`：名字就是
+   `LibboxSetup` / `LibboxCheckConfig` / `LibboxStartService` /
+   `LibboxStopService` / `LibboxVersion`。但关键一点之前猜错了：gomobile
+   生成的是普通 C 函数（`BOOL LibboxXxx(..., NSError** error)`），不是
+   ObjC 方法，所以 Swift 不会把它转成 `throws`——调用处必须传
+   `&error` 并查 BOOL（见 SingBoxBridge.swift）。无 error 返回的
+   `LibboxVersion()` 直接调，没问题。
 2. **go.mod 的 Go 版本**。暂写 `go 1.24`。若 CI 报 `requires go >= x.y`，
    改成对应版本；`setup-go` 用 stable，一般够新。
 3. **go.sum 缺失**。本机无 Go，无法预生成；CI 的 `go mod tidy` 会现场生成。
@@ -65,9 +67,11 @@
 6. **DNS 一节是否多余/缺字段**。JSON 里写了 `dns: {servers: [{tag: local,
    type: local}], final: local}`；若 CheckConfig 报 dns 字段错，删掉 dns 一节
    再试（无 dns 时 sing-box 仍有默认解析路径）。
-7. **URLSession SOCKS 默认版本**。proxy 字典只给了 SOCKSEnable / SOCKSProxy /
-   SOCKSPort，未显式指定 SOCKS5；若握手失败，排查点之一是显式指定版本
-   或改用 mixed 入站的 HTTP 模式探。
+7. **URLSession SOCKS 键（已实证）**。`kCFNetworkProxiesSOCKS*` 三个常量在
+   iOS SDK 里标 macOS-only（CF_AVAILABLE(10_6, NA)），第二版构建直接编不过。
+   改法：用原始字符串键 `"SOCKSEnable"` / `"SOCKSProxy"` / `"SOCKSPort"`
+   （就是这三个常量的值），URLSession 在 iOS 上读的就是这些键。若真机上
+   握手失败，再排查是否要显式指定版本或改走 mixed 入站的 HTTP 模式探。
 8. **Info.plist / project.yml 未经 xcodegen 实测**。xcodegen 生成与归档只在
    CI 验证；bundle id `com.example.tuicdemo` 是占位，签名安装时按实际账号
    规则改（SideInstaller 签名时会重签，不依赖此 id）。

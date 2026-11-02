@@ -3,13 +3,13 @@ import Libbox
 
 /// Thin Swift wrapper over the gomobile-generated Libbox bindings.
 ///
-/// SYMBOL NAMES ARE AN ASSUMPTION — READ NOTES.md BEFORE BUILDING:
-/// gomobile bind names package-level Go functions as
-/// <CapitalizedPackageName><FuncName> (here: LibboxSetup, LibboxCheckConfig,
-/// LibboxStartService, LibboxStopService, LibboxVersion), with Go `error`
-/// returns surfacing as Swift `throws`. After the first CI build, confirm
-/// against Libbox.xcframework's generated headers and fix the names here if
-/// they differ — that is a one-line-per-call fix, not a redesign.
+/// VERIFIED against the CI-generated header (Libbox.objc.h, 2026-11-02):
+/// gomobile bind emits plain C functions, NOT ObjC methods, so Swift does
+/// NOT convert them to `throws`. A Go function returning only `error`
+/// becomes `BOOL LibboxXxx(..., NSError** error)` — the call site must pass
+/// an NSErrorPointer (`&error`) and check the BOOL. Names are confirmed:
+/// LibboxSetup / LibboxCheckConfig / LibboxStartService / LibboxStopService /
+/// LibboxVersion (no-error functions like Version import cleanly).
 ///
 /// Security: the TUIC config JSON (which contains uuid/password) is passed
 /// to sing-box and never written to disk, never logged, and never included
@@ -28,7 +28,10 @@ enum SingBoxBridge {
             .appendingPathComponent("singbox", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let path = dir.path
-        try LibboxSetup(path, path, path)
+        var error: NSError?
+        guard LibboxSetup(path, path, path, &error) else {
+            throw error ?? NSError(domain: "TUICDemo", code: -1, userInfo: [NSLocalizedDescriptionKey: "libbox setup failed"])
+        }
         setupDone = true
     }
 
@@ -40,22 +43,35 @@ enum SingBoxBridge {
     /// verbatim on failure.
     static func start(configJSON: String) throws {
         try setupIfNeeded()
-        try LibboxCheckConfig(configJSON)
-        try LibboxStartService(configJSON)
+        var error: NSError?
+        guard LibboxCheckConfig(configJSON, &error) else {
+            throw error ?? NSError(domain: "TUICDemo", code: -1, userInfo: [NSLocalizedDescriptionKey: "config check failed"])
+        }
+        guard LibboxStartService(configJSON, &error) else {
+            throw error ?? NSError(domain: "TUICDemo", code: -1, userInfo: [NSLocalizedDescriptionKey: "service start failed"])
+        }
     }
 
     static func stop() throws {
-        try LibboxStopService()
+        var error: NSError?
+        guard LibboxStopService(&error) else {
+            throw error ?? NSError(domain: "TUICDemo", code: -1, userInfo: [NSLocalizedDescriptionKey: "service stop failed"])
+        }
     }
 
     /// Probe https://example.com through the local SOCKS inbound.
     /// Returns (HTTP status, milliseconds). Throws the URLSession error.
+    ///
+    /// The kCFNetworkProxiesSOCKS* constants are macOS-only in the SDK
+    /// (CF_AVAILABLE(10_6, NA)); the raw string keys below carry the same
+    /// values ("SOCKSEnable" / "SOCKSProxy" / "SOCKSPort") and are what
+    /// URLSession reads on iOS.
     static func probe() async throws -> (status: Int, milliseconds: Int) {
         let sessionConfig = URLSessionConfiguration.ephemeral
         sessionConfig.connectionProxyDictionary = [
-            kCFNetworkProxiesSOCKSEnable as String: true,
-            kCFNetworkProxiesSOCKSProxy as String: "127.0.0.1",
-            kCFNetworkProxiesSOCKSPort as String: socksPort,
+            "SOCKSEnable": true,
+            "SOCKSProxy": "127.0.0.1",
+            "SOCKSPort": socksPort,
         ]
         let session = URLSession(configuration: sessionConfig)
         var request = URLRequest(
