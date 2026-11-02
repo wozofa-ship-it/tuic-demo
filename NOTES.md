@@ -67,11 +67,14 @@
 6. **DNS 一节是否多余/缺字段**。JSON 里写了 `dns: {servers: [{tag: local,
    type: local}], final: local}`；若 CheckConfig 报 dns 字段错，删掉 dns 一节
    再试（无 dns 时 sing-box 仍有默认解析路径）。
-7. **URLSession SOCKS 键（已实证）**。`kCFNetworkProxiesSOCKS*` 三个常量在
+7. **URLSession SOCKS 键（v04 真机已推翻）**。`kCFNetworkProxiesSOCKS*` 三个常量在
    iOS SDK 里标 macOS-only（CF_AVAILABLE(10_6, NA)），第二版构建直接编不过。
-   改法：用原始字符串键 `"SOCKSEnable"` / `"SOCKSProxy"` / `"SOCKSPort"`
-   （就是这三个常量的值），URLSession 在 iOS 上读的就是这些键。若真机上
-   握手失败，再排查是否要显式指定版本或改走 mixed 入站的 HTTP 模式探。
+   曾以为原始字符串键 `"SOCKSEnable"` / `"SOCKSProxy"` / `"SOCKSPort"`
+   就是这些常量的值、URLSession 在 iOS 上读的就是这些键——错。v04 真机
+   实证：键值类型全对（SOCKSPort 是 Int 10808），请求仍在构造层被毙，
+   报 NSURLErrorDomain -1000 bad URL，根本没出 SOCKS 流量。结论：iOS
+   的 CFNetwork 不接受 SOCKS 代理字典这配置，探测必须自己讲 SOCKS5
+   （见第 13 条），别再往 URLSession 代理字典这条路走。
 8. **Info.plist / project.yml 未经 xcodegen 实测**。xcodegen 生成与归档只在
    CI 验证；bundle id `com.example.tuicdemo` 是占位，签名安装时按实际账号
    规则改（SideInstaller 签名时会重签，不依赖此 id）。
@@ -107,6 +110,13 @@
     运行时未验）。定位手段：失败输出现带 `[domain code]`
     （NSURLErrorDomain = URLSession/CFNetwork，其余 = Go 那边），
     下一版凭它定性。
+13. **探测改手动 SOCKS5 + HTTP（v05，2026-11-02）**。v04 的
+    [NSURLErrorDomain -1000] 定性后，探测不再碰 URLSession：NWConnection
+    直连 127.0.0.1:10808，手动发 SOCKS5 问候（05 01 00）→ CONNECT
+    example.com:80（域名形）→ 明文 HTTP GET（HTTP/1.0，不走 TLS，
+    问的只是隧道通不通）。失败分四档报（TUICDemoProbe 域：1 TCP /
+    2 握手 / 3 CONNECT rep / 4 HTTP，0 超时），每档都说明卡在哪层；
+    全部等待共用一个 30 秒绝对 deadline，核心挂起也不会卡住 UI。
 
 ## 刻意没做的事
 
